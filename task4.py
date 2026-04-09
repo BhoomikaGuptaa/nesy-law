@@ -6,27 +6,23 @@ Inspired by the Simpsons KB example from the course reference material,
 this KB models a small courtroom world with people, roles, evidence,
 and legal rules — connecting symbolic reasoning to the NeSy Law project.
 
-The KB has 12 facts and 3 rules. Queries are run via Python subprocess
-using SWI-Prolog, and results are verified to be consistent.
+The KB has 14 facts and 3 rules. Queries are run using janus-swi,
+SWI-Prolog's official Python binding, which allows Prolog to run
+directly inside Python without subprocess calls.
+
+Local Setup:
+- SWI-Prolog 10.0.2 installed on Windows, added to system PATH
+- Python 3.14
+- janus-swi installed via: pip install janus-swi
 """
 
-import subprocess
+import janus_swi as janus
 import tempfile
 import os
 
 # ── Knowledge Base ────────────────────────────────────────────────────────────
-# Inspired by the Simpsons KB structure from the course reference:
-# entities + relationships + rules, all in Prolog.
-# Domain: a small courtroom world.
-
 KNOWLEDGE_BASE = """
-% ============================================================
-% NeSy Law Task 4 - Legal Dispute Knowledge Base
-% Entities: alice, bob, carol, dan, eve, carlos
-% Relationships: roles, representation, evidence, charges
-% ============================================================
-
-% --- FACTS: Roles ---
+% --- FACTS: Roles (6 facts) ---
 attorney(alice).
 attorney(carlos).
 judge(carol).
@@ -34,31 +30,31 @@ witness(dan).
 witness(eve).
 defendant(bob).
 
-% --- FACTS: Representation ---
+% --- FACTS: Representation (2 facts) ---
 represents(alice, bob).
 represents(carlos, state).
 
-% --- FACTS: Evidence and admissibility ---
+% --- FACTS: Evidence (3 facts) ---
 evidence(fingerprints, bob).
 evidence(security_footage, bob).
 evidence(alibi_note, bob).
 
+% --- FACTS: Admissibility (2 facts) ---
+% alibi_note is intentionally not marked admissible to test rule rejection
 admissible(fingerprints).
 admissible(security_footage).
 
-% --- FACTS: Charges ---
+% --- FACTS: Charges (1 fact) ---
 charged(bob, theft).
 
 % --- RULES ---
 
 % Rule 1: Evidence is valid if it is admissible and links to the defendant.
-% Inspired by: mother(X, Y) :- parent(X, Y), female(X).
 valid_evidence(E, D) :-
     evidence(E, D),
     admissible(E).
 
 % Rule 2: A case is strong if there are two distinct pieces of valid evidence.
-% Inspired by: grandparent(X, Y) :- parent(X, Z), parent(Z, Y).
 strong_case(D) :-
     valid_evidence(E1, D),
     valid_evidence(E2, D),
@@ -72,50 +68,23 @@ may_be_convicted(D) :-
     charged(D, _).
 """
 
+# Load KB by writing to a temp file and consulting it
+with tempfile.NamedTemporaryFile(mode="w", suffix=".pl", delete=False, encoding="utf-8") as f:
+    f.write(KNOWLEDGE_BASE)
+    kb_path = f.name.replace("\\", "/")
+
+janus.query_once(f"consult('{kb_path}')")
+
 # ── Helper functions ──────────────────────────────────────────────────────────
 def run_query(goal):
-    """Run a yes/no Prolog query against the KB."""
-    program = KNOWLEDGE_BASE + f"""
-main :- ({goal} -> writeln('true') ; writeln('false')).
-:- initialization(main, main).
-"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".pl", delete=False, encoding="utf-8") as f:
-        f.write(program)
-        tmp = f.name
-    try:
-        result = subprocess.run(["swipl", "-q", tmp],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace")
-        return result.stdout.strip() or "(no output)"
-    except FileNotFoundError:
-        return "[ERROR] SWI-Prolog not found"
-    finally:
-        try: os.unlink(tmp)
-        except: pass
-
+    """Run a yes/no query using janus directly inside Python."""
+    result = janus.query_once(goal)
+    return "true" if result.get("truth") else "false"
 
 def run_findall(var, goal):
-    """Run a findall query to list all matching results."""
-    program = KNOWLEDGE_BASE + f"""
-main :-
-    findall({var}, {goal}, Results),
-    (Results = [] -> writeln('none') ; maplist(writeln, Results)).
-:- initialization(main, main).
-"""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".pl", delete=False, encoding="utf-8") as f:
-        f.write(program)
-        tmp = f.name
-    try:
-        result = subprocess.run(["swipl", "-q", tmp],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace")
-        return result.stdout.strip() or "(no output)"
-    except FileNotFoundError:
-        return "[ERROR] SWI-Prolog not found"
-    finally:
-        try: os.unlink(tmp)
-        except: pass
-
+    """Run a findall query and return all results as a list."""
+    results = [str(sol[var]) for sol in janus.query(goal)]
+    return results if results else ["none"]
 
 # ── Queries ───────────────────────────────────────────────────────────────────
 yes_no_queries = [
@@ -142,8 +111,8 @@ list_queries = [
 print("\n" + "=" * 65)
 print("  NeSy Law — Task 4: Legal Dispute Knowledge Base")
 print("=" * 65)
-print("\n  12 facts · 3 rules · courtroom domain")
-print("  Results verified via Python subprocess + SWI-Prolog\n")
+print("\n  14 facts · 3 rules · courtroom domain")
+print("  Using janus-swi: SWI-Prolog running directly inside Python\n")
 
 print("  YES / NO QUERIES")
 print("  " + "-" * 58)
@@ -154,12 +123,18 @@ for goal, desc in yes_no_queries:
 print("\n  LIST QUERIES")
 print("  " + "-" * 58)
 for var, goal, desc in list_queries:
-    result = run_findall(var, goal)
+    results = run_findall(var, goal)
     print(f"  {desc}")
-    for line in result.split("\n"):
-        print(f"    > {line}")
+    for r in results:
+        print(f"    > {r}")
     print()
 
 print("=" * 65)
 print("  All queries complete.")
 print("=" * 65 + "\n")
+
+# Cleanup temp file
+try:
+    os.unlink(kb_path)
+except:
+    pass
